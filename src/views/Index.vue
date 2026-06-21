@@ -93,7 +93,7 @@
         <div class="map-container">
           <div class="map-grid">
             <div v-for="(cell, index) in mapGrid" :key="index" 
-                 :class="'map-cell ' + cell.type"
+                 :class="['map-cell', cell.type, { explored: cell.explored }]"
                  @click="exploreCell(index)">
               {{ cell.icon }}
             </div>
@@ -133,8 +133,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, watch } from 'vue';
+import { useRouter, useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useExpeditionStore } from '../store';
+
+const router = useRouter();
+const route = useRoute();
+const expeditionStore = useExpeditionStore();
 
 const resources = ref({
   food: 100,
@@ -226,6 +232,51 @@ const craftTools = () => {
   }
 };
 
+const getResourceName = (type) => {
+  const names = { food: '食物', water: '淡水', wood: '木材', stone: '石头' };
+  return names[type] || type;
+};
+
+const getResourceIcon = (type) => {
+  const icons = { food: '🍖', water: '💧', wood: '🪵', stone: '⛏️' };
+  return icons[type] || '📦';
+};
+
+const processExpeditionResult = (result) => {
+  if (!result) return;
+
+  const cell = mapGrid.value[result.cellIndex];
+  
+  if (result.cellExplored) {
+    cell.explored = true;
+  }
+
+  for (const [resource, amount] of Object.entries(result.resourceChanges)) {
+    if (resources.value[resource] !== undefined) {
+      resources.value[resource] = Math.max(0, resources.value[resource] + amount);
+    }
+  }
+
+  addMessage(result.message);
+
+  if (result.occurredRisks.length > 0) {
+    addMessage(`遭遇事件: ${result.occurredRisks.map(r => r.name).join('、')}`);
+  }
+
+  const gains = Object.entries(result.gainedRewards)
+    .filter(([_, amount]) => amount > 0)
+    .map(([resource, amount]) => `${getResourceIcon(resource)}${getResourceName(resource)} +${amount}`)
+    .join('、');
+  
+  if (gains) {
+    addMessage(`获得奖励: ${gains}`);
+  }
+
+  if (result.cellExplored) {
+    addMessage(`🗺️ 地图已更新: ${cell.icon} 区域已探索`);
+  }
+};
+
 const exploreCell = (index) => {
   const cell = mapGrid.value[index];
   if (cell.explored) {
@@ -233,48 +284,32 @@ const exploreCell = (index) => {
     return;
   }
   
-  ElMessageBox.confirm(
-    `确定要探索这个区域吗？可能会遇到危险或发现资源。`,
-    '探索未知区域',
-    {
-      confirmButtonText: '开始探索',
-      cancelButtonText: '取消',
-      type: 'warning'
+  if (cell.type === 'camp') {
+    ElMessage.info('这是你的营地，不需要探索');
+    return;
+  }
+
+  router.push({
+    name: 'ExpeditionPrepare',
+    query: {
+      cellIndex: index,
+      cellData: JSON.stringify(cell),
+      resources: JSON.stringify(resources.value)
     }
-  ).then(() => {
-    addMessage(`开始探索${cell.icon}区域...`);
-    
-    setTimeout(() => {
-      cell.explored = true;
-      
-      // 随机事件
-      const random = Math.random();
-      if (random < 0.3) {
-        const foodGain = Math.floor(Math.random() * 20) + 10;
-        resources.value.food += foodGain;
-        addMessage(`探索发现了食物！获得${foodGain}食物`);
-        ElMessage.success(`探索发现了食物！获得${foodGain}食物`);
-      } else if (random < 0.6) {
-        const woodGain = Math.floor(Math.random() * 15) + 5;
-        resources.value.wood += woodGain;
-        addMessage(`探索发现了木材！获得${woodGain}木材`);
-        ElMessage.success(`探索发现了木材！获得${woodGain}木材`);
-      } else if (random < 0.8) {
-        const stoneGain = Math.floor(Math.random() * 10) + 5;
-        resources.value.stone += stoneGain;
-        addMessage(`探索发现了石头！获得${stoneGain}石头`);
-        ElMessage.success(`探索发现了石头！获得${stoneGain}石头`);
-      } else {
-        resources.value.food -= 10;
-        resources.value.water -= 10;
-        addMessage(`探索遇到了危险！损失了10食物和10水`);
-        ElMessage.warning(`探索遇到了危险！损失了10食物和10水`);
-      }
-    }, 5000);
-  }).catch(() => {
-    addMessage('取消了探索');
   });
 };
+
+watch(() => route.query.expeditionResult, (newResult) => {
+  if (newResult) {
+    try {
+      const result = JSON.parse(newResult);
+      processExpeditionResult(result);
+      history.replaceState({}, '', window.location.pathname);
+    } catch (e) {
+      console.error('Failed to parse expedition result:', e);
+    }
+  }
+}, { immediate: true });
 
 onMounted(() => {
   addMessage('欢迎来到海岛生存游戏！');
